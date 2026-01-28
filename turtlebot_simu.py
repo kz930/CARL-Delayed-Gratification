@@ -102,17 +102,15 @@ class DelayedGratificationRobot(Node):
     def run_trial(self, p_wait):
         global qTbl
 
-        # r = random.random()
-        # if r < 0.25:
-        #     current_state = EXPM_LR
-        # elif r < 0.50:
-        #     current_state = EXPM_RL
-        # elif r < 0.75:
-        #     current_state = CTRL_LR
-        # else:
-        #     current_state = CTRL_RL
-
-        current_state = EXPM_LR
+        r = random.random()
+        if r < 0.25:
+            current_state = EXPM_LR
+        elif r < 0.50:
+            current_state = EXPM_RL
+        elif r < 0.75:
+            current_state = CTRL_LR
+        else:
+            current_state = CTRL_RL
 
         q = qTbl
 

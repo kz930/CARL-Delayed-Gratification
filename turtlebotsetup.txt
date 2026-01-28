@@ -1,0 +1,7 @@
+Rebuild and source again
+
+cd ~/turtlebot4_ws
+colcon build
+source install/setup.bash
+
+
