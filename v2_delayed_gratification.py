@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 """
 Kary Zheng
 14 January 2026
+Best one for delayed_gratification
 """
 
 ACTIONS = 2

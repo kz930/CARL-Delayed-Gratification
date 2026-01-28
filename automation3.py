@@ -3,6 +3,12 @@ import time
 import os
 import re
 
+"""
+Kary Zheng
+28 Jan 2026
+This file is for running turtlebot (automation)
+"""
+
 # This program launches the necessary commands and waits until the previous command sends a message allowing for the next command to go underway.  It creates a new terminal logging the previous terminal to read for messages
 
 interval = 0.2  # just a tiny delay for spawn stability

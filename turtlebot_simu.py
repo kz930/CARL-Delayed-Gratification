@@ -12,7 +12,13 @@ import time
 """
 Kary Zheng
 28 January 2026
-Next step should go back home...
+This is for turtlebot simulation, implemented using
+v2_delayed_gratification.py method
+Now it works on turtlebot, turtlebot can go back and forth
+between the two hard-coded coordinate
+Next step would be:
+1. letting cuttlebot goes home after prey capture
+2. letting cuttlebot explore and store coordinate where food appears
 """
 
 ACTIONS = 2
