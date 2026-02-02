@@ -74,51 +74,75 @@ def action_select(q, beta):
 class DelayedGratificationRobot(Node):
     def __init__(self):
         super().__init__('delayed_gratification_robot')
+
         self.navigator = BasicNavigator()
-        self.navigator.waitUntilNav2Active()
-        # Set initial pose
+
+        # Build start pose FIRST
         self.start_pose = self.navigator.getPoseStamped(
             [-0.023635001853108406, -0.023635001853108406],
             TurtleBot4Directions.NORTH
         )
+
+        # Set initial pose before Nav2 starts
         self.navigator.setInitialPose(self.start_pose)
 
+        self.get_logger().info("Waiting for Nav2 to become active...")
+        self.navigator.waitUntilNav2Active()
+        time.sleep(2.0)
 
         self.run_experiment()
 
     # =========== Added & Modified here ===========
-
-    def go_to_pose_xy(self, x, y):
-        self.get_logger().info(f"[Nav] go_to_pose_xy x={x:.4f} y={y:.4f}")
+    def navigate_to(self, x, y, orientation=None, timeout_sec=60.0):
+        self.navigator.cancelTask()
+        time.sleep(0.2)
+        self.navigator.clearAllCostmaps()
 
         goal = PoseStamped()
         goal.header.frame_id = "map"
         goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = x
-        goal.pose.position.y = y
-        goal.pose.orientation.w = 1.0    # Default direction
+        goal.pose.position.x = float(x)
+        goal.pose.position.y = float(y)
+        if orientation is None:
+            goal.pose.orientation.w = 1.0
+        else:
+            goal.pose.orientation = orientation
 
+        self.get_logger().info(f"[Nav] Going to ({x:.3f}, {y:.3f})")
         self.navigator.goToPose(goal)
 
-        start_time = time.time()
+        start = time.time()
         while not self.navigator.isTaskComplete():
             rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start_time > 60:
-                self.get_logger().warn("Navigation timeout!")
-                break
+            if time.time() - start > timeout_sec:
+                self.get_logger().warn(f"Navigation timeout after {timeout_sec}s, canceling task")
+                self.navigator.cancelTask()
+                return False
+
+        result = self.navigator.getResult()
+        if result == BasicNavigator.TaskResult.SUCCEEDED:
+            self.get_logger().info("Navigation SUCCEEDED")
+            return True
+        elif result == BasicNavigator.TaskResult.FAILED:
+            self.get_logger().warn("Navigation FAILED")
+            return False
+        else:
+            self.get_logger().warn("Navigation CANCELED")
+            return False
+
+
+    def go_to_pose_xy(self, x, y):
+        return self.navigate_to(x, y)
 
 
     def go_home(self):
-        self.get_logger().info("Returning to start pose...")
-        self.navigator.goToPose(self.start_pose)
+        self.get_logger().info("Returning to home pose...")
 
-        start_time = time.time()
-        while not self.navigator.isTaskComplete():
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if time.time() - start_time > 60:
-                self.get_logger().warn("Navigation timeout!")
-                break
+        x = self.start_pose.pose.position.x
+        y = self.start_pose.pose.position.y
+        orientation = self.start_pose.pose.orientation
 
+        return self.navigate_to(x, y, orientation)
 
 
 
@@ -158,7 +182,12 @@ class DelayedGratificationRobot(Node):
 
         # ========== Added here ============
         # 1. Trial start, go to the start point first
-        self.go_home()
+        self.get_logger().info("Going home before trial")
+        ok = self.go_home()
+        if not ok:
+            self.get_logger().warn("go_home failed — retrying once...")
+            self.go_home()
+
 
         # 2. Thinking
         # I'll just add a pause here to monitor that the robot is making decisions.
@@ -244,7 +273,7 @@ class DelayedGratificationRobot(Node):
                 f"{(delay_gratification_experiment_results[d]*100)/exp_cnt:.2f}\t"
                 f"{(delay_gratification_ctrl_results[d]*100)/ctrl_cnt:.2f}"
             )
-
+        self.get_logger().info("EXPERIMENT FINISHED, PRINTING Q TABLE")
         self.print_q_table()
 
 # ------------------ MAIN ------------------
@@ -252,7 +281,6 @@ class DelayedGratificationRobot(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = DelayedGratificationRobot()
-    rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 
