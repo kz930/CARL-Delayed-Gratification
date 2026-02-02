@@ -8,11 +8,12 @@ from math import exp
 import numpy as np
 from scipy.stats import norm
 import time
+from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions
 
 """
 Kary Zheng
-28 January 2026
-Can go to two chamber places
+02 Feb 2026
+Current version (testing)
 """
 
 ACTIONS = 2
@@ -75,8 +76,50 @@ class DelayedGratificationRobot(Node):
         super().__init__('delayed_gratification_robot')
         self.navigator = BasicNavigator()
         self.navigator.waitUntilNav2Active()
+        # Set initial pose
+        self.start_pose = self.navigator.getPoseStamped(
+            [-0.023635001853108406, -0.023635001853108406],
+            TurtleBot4Directions.NORTH
+        )
+        self.navigator.setInitialPose(self.start_pose)
+
 
         self.run_experiment()
+
+    # =========== Added & Modified here ===========
+
+    def go_to_pose_xy(self, x, y):
+        self.get_logger().info(f"[Nav] go_to_pose_xy x={x:.4f} y={y:.4f}")
+
+        goal = PoseStamped()
+        goal.header.frame_id = "map"
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.position.x = x
+        goal.pose.position.y = y
+        goal.pose.orientation.w = 1.0    # Default direction
+
+        self.navigator.goToPose(goal)
+
+        start_time = time.time()
+        while not self.navigator.isTaskComplete():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if time.time() - start_time > 60:
+                self.get_logger().warn("Navigation timeout!")
+                break
+
+
+    def go_home(self):
+        self.get_logger().info("Returning to start pose...")
+        self.navigator.goToPose(self.start_pose)
+
+        start_time = time.time()
+        while not self.navigator.isTaskComplete():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if time.time() - start_time > 60:
+                self.get_logger().warn("Navigation timeout!")
+                break
+
+
 
 
     def go_to_chamber(self, action):
@@ -85,22 +128,22 @@ class DelayedGratificationRobot(Node):
         else:
             x, y = RIGHT_CHAMBER
 
-        goal = PoseStamped()
-        goal.header.frame_id = "map"
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = x
-        goal.pose.position.y = y
-        goal.pose.orientation.w = 1.0
+        return self.go_to_pose_xy(x, y)
 
-        self.navigator.goToPose(goal)
-
-        while not self.navigator.isTaskComplete():
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        return self.navigator.getResult()
+    # ========================================================
 
 
-    def run_trial(self, p_wait):
+# =============== Modified here =========================
+# Since we would like to have the robot go back to the start points at the start of each trial, the running logic is:
+# 1. Reset: Before each trial, it goes back to the START_POSE
+# 2. Think: Once it goes back to the starting point, it pauses for a few seconds (as the thinking/decision time)
+# 3. Act: Once the thinking is over, it goes to LEFT or RIGHT
+    def print_q_table(self):
+        self.get_logger().info("Current Q-Table:")
+        for s in range(STATES):
+            self.get_logger().info(f"State {s}: LEFT={qTbl[s][LEFT]:.3f}, RIGHT={qTbl[s][RIGHT]:.3f}")
+
+    def run_trial(self, p_wait, delay_time=0):
         global qTbl
 
         r = random.random()
@@ -113,18 +156,35 @@ class DelayedGratificationRobot(Node):
         else:
             current_state = CTRL_RL
 
-        q = qTbl
+        # ========== Added here ============
+        # 1. Trial start, go to the start point first
+        self.go_home()
+
+        # 2. Thinking
+        # I'll just add a pause here to monitor that the robot is making decisions.
+        self.get_logger().info("Thinking / Making  Decisions...")
+        time.sleep(2.0)
+
+        # =============================================
+
+        # Modified
+        import copy
+
+        q_thinking = copy.deepcopy(qTbl)    # Changed here, with copy as a tempurary thinking rather than touching or changing the long-term memory 
+        #(just in case if this time the robot doesn't want to wait, it forgets there are good shrimps there forever)
 
         # Apply patience ONLY to live shrimp choices
         if current_state == EXPM_LR:
-            q[current_state][LEFT] *= p_wait
+            q_thinking[current_state][LEFT] *= p_wait
         elif current_state == EXPM_RL:
-            q[current_state][RIGHT] *= p_wait
+            q_thinking[current_state][RIGHT] *= p_wait
 
-        act = action_select(q[current_state], BETA)
+        act = action_select(q_thinking[current_state], BETA)
 
         # Robot physically goes to chamber
         self.go_to_chamber(act)
+        self.get_logger().info("Arrived at chamber, consuming reward...")
+        time.sleep(1.0)
 
         # Determine reward EXACTLY like your simulation
         if current_state == EXPM_LR:
@@ -144,12 +204,12 @@ class DelayedGratificationRobot(Node):
 
 
     def run_experiment(self):
-
+        
         # ---------- TRAINING PHASE ----------
         #TRIALS = 100
         TRIALS=5
         for t in range(TRIALS):
-            self.run_trial(1.0)
+            self.run_trial(1.0, delay_time=0)
 
         # ---------- DELAY TEST PHASE ----------
         # delays = np.array([10,20,30,40,50,60,70,80,90,100,110,120,130])
@@ -161,22 +221,31 @@ class DelayedGratificationRobot(Node):
 
         exp_trials = np.zeros(len(delays))
         ctrl_trials = np.zeros(len(delays))
+        self.get_logger().info("delay\texpm\tctrl")
 
         for d in range(len(delays)):
+            exp_cnt = 0
+            ctrl_cnt = 0
+
             for t in range(DELAY_TRIALS):
-                rwd, ex, state, act = self.run_trial(prob_wait(delays[d]))
+                rwd, ex, state, act = self.run_trial(prob_wait(delays[d]), delay_time=delays[d])
 
                 if ex:
+                    exp_cnt += 1
                     exp_trials[d] += 1
                     delay_gratification_experiment_results[d] += int(rwd > DEAD_RWD)
                 else:
+                    ctrl_cnt += 1
                     ctrl_trials[d] += 1
                     delay_gratification_ctrl_results[d] += int(rwd > UNOBTAINABLE_RWD)
 
             self.get_logger().info(
-                f"Delay {delays[d]}  EXPM={(delay_gratification_experiment_results[d]*100)/exp_trials[d]:.2f}  CTRL={(delay_gratification_ctrl_results[d]*100)/ctrl_trials[d]:.2f}"
+                f"{delays[d]}\t"
+                f"{(delay_gratification_experiment_results[d]*100)/exp_cnt:.2f}\t"
+                f"{(delay_gratification_ctrl_results[d]*100)/ctrl_cnt:.2f}"
             )
 
+        self.print_q_table()
 
 # ------------------ MAIN ------------------
 
