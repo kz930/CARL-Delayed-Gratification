@@ -152,16 +152,13 @@ class DelayedGratificationRobot(Node):
     def run_experiment(self):
 
         # ---------- TRAINING PHASE ----------
-        #TRIALS = 100
-        TRIALS=5
+        TRIALS = 100
         for t in range(TRIALS):
             self.run_trial(1.0)
 
         # ---------- DELAY TEST PHASE ----------
-        # delays = np.array([10,20,30,40,50,60,70,80,90,100,110,120,130])
-        delays = np.array([10,20])
-        # DELAY_TRIALS = 100
-        DELAY_TRIALS=3
+        delays = np.array([10,20,30,40,50,60,70,80,90,100,110,120,130])
+        DELAY_TRIALS = 100
         delay_gratification_experiment_results = np.zeros(len(delays))
         delay_gratification_ctrl_results = np.zeros(len(delays))
 

@@ -1,7 +1,12 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
-from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
+from turtlebot4_navigation.turtlebot4_navigator import (
+    TurtleBot4Navigator,
+    TurtleBot4Directions
+)
+from nav2_simple_commander.robot_navigator import TaskResult
 
 import random
 from math import exp
@@ -10,14 +15,19 @@ from scipy.stats import norm
 import time
 import copy
 
-from turtlebot4_navigation.turtlebot4_navigator import TurtleBot4Directions
 
 """
 Kary Zheng
-Current version — delayed gratification robot
-FEB 9TH
-(Testing)
+Delayed Gratification Robot
+TurtleBot4 Version (Option A - Correct API Usage)
+Go Home Success
+
+Uses:
+- TurtleBot4Navigator
+- getPoseStamped()
+- TurtleBot4Directions
 """
+
 
 # ------------------ CONSTANTS ------------------
 
@@ -39,6 +49,7 @@ ALPHA = 0.10
 BETA = 1.0
 GAMMA = 0.99
 
+
 # ------------------ MAP COORDINATES ------------------
 
 HOME_X = -0.023635001853108406
@@ -47,9 +58,11 @@ HOME_Y = -0.023635001853108406
 LEFT_CHAMBER  = (1.9318245649,  0.5751032829)
 RIGHT_CHAMBER = (1.9457954168, -0.2844115793)
 
+
 # ------------------ Q TABLE ------------------
 
 qTbl = [[0.0 for _ in range(ACTIONS)] for _ in range(STATES)]
+
 
 # ------------------ RL FUNCTIONS ------------------
 
@@ -62,9 +75,8 @@ def prob_wait(tim):
 
 def action_select(q, beta):
     softmax_sum = sum(exp(beta * v) for v in q)
-
     r = random.random()
-    cumulative = 0
+    cumulative = 0.0
 
     for i in range(len(q)):
         p = exp(beta * q[i]) / softmax_sum
@@ -82,9 +94,16 @@ class DelayedGratificationRobot(Node):
     def __init__(self):
         super().__init__('delayed_gratification_robot')
 
-        self.navigator = BasicNavigator()
+        self.navigator = TurtleBot4Navigator()
 
-        # Initial pose
+        # 1️⃣ Wait for Nav2 lifecycle
+        self.get_logger().info("Waiting for Nav2...")
+        self.navigator.waitUntilNav2Active()
+
+        # 2️⃣ Wait for /map topic
+        self._wait_for_map_topic(timeout_sec=20.0)
+
+        # 3️⃣ Set initial pose using TurtleBot4 helper
         self.start_pose = self.navigator.getPoseStamped(
             [HOME_X, HOME_Y],
             TurtleBot4Directions.NORTH
@@ -92,28 +111,44 @@ class DelayedGratificationRobot(Node):
 
         self.navigator.setInitialPose(self.start_pose)
 
-        self.get_logger().info("Waiting for Nav2...")
-        self.navigator.waitUntilNav2Active()
-        time.sleep(2.0)
+        # Let AMCL stabilize
+        time.sleep(1.5)
 
+        # Run experiment
         self.run_experiment()
+        self.get_logger().info("Experiment finished.")
+
+
+    # ------------------ MAP WAIT ------------------
+
+    def _wait_for_map_topic(self, timeout_sec=20.0):
+        start = time.time()
+        while time.time() - start < timeout_sec:
+            topics = [name for (name, _) in self.get_topic_names_and_types()]
+            if "/map" in topics:
+                self.get_logger().info("[Init] /map topic detected.")
+                return True
+            rclpy.spin_once(self, timeout_sec=0.1)
+        self.get_logger().warn("[Init] Timed out waiting for /map.")
+        return False
+
 
     # ------------------ NAVIGATION ------------------
 
-    def navigate_to(self, x, y, orientation=None, timeout_sec=60.0):
+    def navigate_to(self, x, y, direction=None, timeout_sec=60.0):
 
         self.navigator.clearAllCostmaps()
 
-        goal = PoseStamped()
-        goal.header.frame_id = "map"
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.position.x = float(x)
-        goal.pose.position.y = float(y)
-
-        if orientation is None:
-            goal.pose.orientation.w = 1.0
+        if direction is None:
+            goal = self.navigator.getPoseStamped(
+                [x, y],
+                TurtleBot4Directions.NORTH
+            )
         else:
-            goal.pose.orientation = orientation
+            goal = self.navigator.getPoseStamped(
+                [x, y],
+                direction
+            )
 
         self.get_logger().info(f"[Nav] Going to ({x:.3f}, {y:.3f})")
 
@@ -141,13 +176,15 @@ class DelayedGratificationRobot(Node):
             self.get_logger().warn("[Nav] CANCELED")
             return False
 
+
     def go_home(self):
         self.get_logger().info("Returning home...")
         return self.navigate_to(
             HOME_X,
             HOME_Y,
-            self.start_pose.pose.orientation
+            TurtleBot4Directions.NORTH
         )
+
 
     def go_to_chamber(self, action):
         if action == LEFT:
@@ -155,7 +192,22 @@ class DelayedGratificationRobot(Node):
         else:
             x, y = RIGHT_CHAMBER
 
-        return self.navigate_to(x, y)
+        # First navigate normally
+        success = self.navigate_to(x, y)
+
+        if not success:
+            return False
+
+        # Then explicitly rotate to SOUTH
+        self.get_logger().info("[Nav] Adjusting orientation to SOUTH")
+
+        return self.navigate_to(
+            x,
+            y,
+            TurtleBot4Directions.SOUTH
+        )
+
+
 
     # ------------------ EXPERIMENT LOGIC ------------------
 
@@ -166,34 +218,23 @@ class DelayedGratificationRobot(Node):
                 f"State {s}: L={qTbl[s][LEFT]:.3f}, R={qTbl[s][RIGHT]:.3f}"
             )
 
+
     def run_trial(self, p_wait):
 
         global qTbl
 
-        # Select random state
-        r = random.random()
-        if r < 0.25:
-            state = EXPM_LR
-        elif r < 0.50:
-            state = EXPM_RL
-        elif r < 0.75:
-            state = CTRL_LR
-        else:
-            state = CTRL_RL
+        state = random.randint(0, STATES - 1)
 
-        # Step 1: Reset
-        ok = self.go_home()
-        if not ok:
+        # Reset to home
+        if not self.go_home():
             self.get_logger().error("Failed to go home — aborting trial")
             return 0.0, False, state, None
 
         time.sleep(1.0)
 
-        # Step 2: Think
-        self.get_logger().info("Thinking...")
+        # Thinking phase
         time.sleep(2.0)
 
-        # Step 3: Decision
         q_thinking = copy.deepcopy(qTbl)
 
         if state == EXPM_LR:
@@ -203,16 +244,12 @@ class DelayedGratificationRobot(Node):
 
         act = action_select(q_thinking[state], BETA)
 
-        # Step 4: Act
-        ok = self.go_to_chamber(act)
-        if not ok:
-            self.get_logger().warn("Chamber navigation failed")
+        # Go to chamber
+        self.go_to_chamber(act)
 
-
-        self.get_logger().info("Arrived at chamber")
         time.sleep(1.0)
 
-        # Step 5: Reward
+        # Reward logic
         if state == EXPM_LR:
             reward = LIVE_RWD if act == LEFT else DEAD_RWD
         elif state == EXPM_RL:
@@ -222,49 +259,23 @@ class DelayedGratificationRobot(Node):
         else:
             reward = DEAD_RWD if act == LEFT else UNOBTAINABLE_RWD
 
-        # Step 6: Update
         qTbl[state][act] += ALPHA * (reward - qTbl[state][act])
 
-        experimental = state < CTRL_LR
+        return reward, state < CTRL_LR, state, act
 
-        return reward, experimental, state, act
-
-    # ------------------ EXPERIMENT RUN ------------------
 
     def run_experiment(self):
 
-        TRIALS = 5
-
+        TRIALS = 20
         for _ in range(TRIALS):
             self.run_trial(1.0)
 
         delays = np.array([10, 20])
-        DELAY_TRIALS = 3
-
-        self.get_logger().info("delay\texpm\tctrl")
+        DELAY_TRIALS = 10
 
         for d in delays:
-
-            exp_cnt = 0
-            ctrl_cnt = 0
-            exp_success = 0
-            ctrl_success = 0
-
             for _ in range(DELAY_TRIALS):
-
-                rwd, ex, _, _ = self.run_trial(prob_wait(d))
-
-                if ex:
-                    exp_cnt += 1
-                    exp_success += int(rwd > DEAD_RWD)
-                else:
-                    ctrl_cnt += 1
-                    ctrl_success += int(rwd > UNOBTAINABLE_RWD)
-
-            exp_rate = (exp_success * 100 / exp_cnt) if exp_cnt else 0
-            ctrl_rate = (ctrl_success * 100 / ctrl_cnt) if ctrl_cnt else 0
-
-            self.get_logger().info(f"{d}\t{exp_rate:.2f}\t{ctrl_rate:.2f}")
+                self.run_trial(prob_wait(d))
 
         self.print_q_table()
 
@@ -273,9 +284,7 @@ class DelayedGratificationRobot(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     node = DelayedGratificationRobot()
-
     node.destroy_node()
     rclpy.shutdown()
 

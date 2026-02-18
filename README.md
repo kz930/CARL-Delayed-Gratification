@@ -100,3 +100,9 @@ This implementation cleanly isolates delayed gratification effects by:
 - Avoiding delay contamination of baseline learning
 
 This makes the results interpretable and suitable for comparison with behavioral experiments.
+
+
+## Rebuild Command
+cd ~/turtlebot4_ws
+colcon build
+source install/setup.bash
