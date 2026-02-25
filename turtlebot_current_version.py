@@ -91,14 +91,11 @@ class DelayedGratificationRobot(Node):
 
         self.navigator = TurtleBot4Navigator()
 
-        # 1️⃣ Wait for Nav2 lifecycle
         self.get_logger().info("Waiting for Nav2...")
         self.navigator.waitUntilNav2Active()
 
-        # 2️⃣ Wait for /map topic
         self._wait_for_map_topic(timeout_sec=20.0)
 
-        # 3️⃣ Set initial pose using TurtleBot4 helper
         self.start_pose = self.navigator.getPoseStamped(
             [HOME_X, HOME_Y],
             TurtleBot4Directions.NORTH
