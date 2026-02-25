@@ -20,7 +20,7 @@ import copy
 Kary Zheng
 Delayed Gratification Robot
 TurtleBot4 Version (Option A - Correct API Usage)
-Go Home Success
+Works fine with few trials
 
 Uses:
 - TurtleBot4Navigator
