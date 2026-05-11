@@ -21,7 +21,7 @@ CTRL_RL = 3  # Unobtainable Shrimp (right); Dead Shrimp (left)
 
 LIVE_RWD = 5.0
 DEAD_RWD = 1.0
-UNOBTAINABLE_RWD = 0.0
+UNOBTAINABLE_RWD = 0.5
 
 # Learning parameters
 ALPHA = 0.10
